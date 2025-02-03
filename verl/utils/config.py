@@ -34,6 +34,7 @@ def validate_config(config):
 
     # A helper function to check "micro_batch_size" vs "micro_batch_size_per_gpu"
     # We throw an error if the user sets both. The new convention is "..._micro_batch_size_per_gpu".
+    # TODO(tgriggs): These print statements are no longer correct.
     def check_mutually_exclusive(mbs, mbs_per_gpu, name: str):
         if mbs is None and mbs_per_gpu is None:
             raise ValueError(f"[{name}] Please set at least one of '{name}.micro_batch_size' or "
@@ -59,6 +60,7 @@ def validate_config(config):
                                  config.actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu,
                                  "actor_rollout_ref.rollout")
 
+    # TODO(tgriggs): Don't require this if critic is not being used.
     if not config.critic.use_dynamic_bsz:
         # Check for critic micro-batch size conflicts
         check_mutually_exclusive(config.critic.ppo_micro_batch_size, config.critic.ppo_micro_batch_size_per_gpu,
