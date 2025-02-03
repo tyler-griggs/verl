@@ -183,6 +183,7 @@ class DataParallelPPOActor(BasePPOActor):
             max_token_len = data.meta_info['max_token_len'] * self.ulysses_sequence_parallel_size
             micro_batches, indices = rearrange_micro_batches(batch=batch, max_token_len=max_token_len)
         else:
+            assert micro_batch_size > 0
             micro_batches = batch.split(micro_batch_size)
 
         log_probs_lst = []
