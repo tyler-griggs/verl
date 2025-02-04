@@ -13,6 +13,20 @@
 # limitations under the License.
 # Adapted from https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/hendrycks_math/utils.py
 
+import re
+
+
+def is_well_formatted(text):
+    if not text:
+        return False
+
+    # Check boxed answer pattern
+    boxed_pattern = r"boxed{.+}"
+
+    # format is correct if boxed in found in the answers
+    if re.search(boxed_pattern, text.strip()):
+        return True
+    return False
 
 def compute_score(solution_str, ground_truth) -> float:
     retval = 0.
@@ -25,7 +39,12 @@ def compute_score(solution_str, ground_truth) -> float:
     except Exception as e:
         print(e)
 
-    return retval
+    if retval > 0.5:
+        return 1.0
+    elif is_well_formatted(solution_str):
+        return -0.5
+    else:
+        return -1
 
 
 # string normalization from https://github.com/EleutherAI/lm-evaluation-harness/blob/master/lm_eval/tasks/hendrycks_math.py

@@ -644,6 +644,7 @@ class RayPPOTrainer(object):
                     # recompute old_log_probs
                     pbar.update(epoch_step, epoch, "Computing old_log_probs ...")
                     with _timer('old_log_prob', timing_raw):
+                        # TODO(tgriggs): ISSUE IS RIGHT HERE
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                         batch = batch.union(old_log_prob)
 
