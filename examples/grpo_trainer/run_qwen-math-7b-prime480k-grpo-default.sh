@@ -34,7 +34,7 @@ python3 -m verl.trainer.main_ppo \
     data.train_batch_size=256 \
     data.val_batch_size=1024 \
     data.max_prompt_length=1024 \
-    data.max_response_length=3076 \
+    data.max_response_length=3072 \
     actor_rollout_ref.model.path=$SFT_MODEL_PATH \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
