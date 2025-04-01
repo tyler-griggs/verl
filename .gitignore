@@ -90,7 +90,7 @@ target/
 celerybeat-schedule
 
 # dotenv
-.env
+# .env
 
 # virtualenv
 venv/
@@ -116,7 +116,7 @@ tests/e2e/toy_examples/deepspeed/synchronous/output.txt
 *.swp
 
 # ckpt
-*.lock
+# *.lock
 
 # data
 *.parquet

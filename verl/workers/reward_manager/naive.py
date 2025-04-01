@@ -45,8 +45,10 @@ class NaiveRewardManager:
             # decode
             prompt_str = self.tokenizer.decode(valid_prompt_ids, skip_special_tokens=True)
             response_str = self.tokenizer.decode(valid_response_ids, skip_special_tokens=True)
+            print(f'TGRIGGS: Example prompt and response: \n\nprompt: {prompt_str}\n\nresponse: {response_str}')
 
-            ground_truth = data_item.non_tensor_batch['reward_model']['ground_truth']
+
+            # ground_truth = data_item.non_tensor_batch['reward_model']['ground_truth']
 
             data_source = data_item.non_tensor_batch['data_source']
 
@@ -55,7 +57,7 @@ class NaiveRewardManager:
             score = self.compute_score(
                 data_source=data_source,
                 solution_str=response_str,
-                ground_truth=ground_truth,
+                ground_truth=0,
                 extra_info=extra_info,
             )
             scores.append(score)
@@ -90,8 +92,9 @@ class NaiveRewardManager:
             # decode
             prompt_str = self.tokenizer.decode(valid_prompt_ids, skip_special_tokens=True)
             response_str = self.tokenizer.decode(valid_response_ids, skip_special_tokens=True)
+            print(f'TGRIGGS: Example prompt and response: \n\nprompt: {prompt_str}\n\nresponse: {response_str}')
 
-            ground_truth = data_item.non_tensor_batch['reward_model']['ground_truth']
+            # ground_truth = data_item.non_tensor_batch['reward_model']['ground_truth']
 
             data_source = data_item.non_tensor_batch['data_source']
 
@@ -100,7 +103,7 @@ class NaiveRewardManager:
             score = self.compute_score(
                 data_source=data_source,
                 solution_str=response_str,
-                ground_truth=ground_truth,
+                ground_truth=0,
                 extra_info=extra_info,
             )
             reward_tensor[i, valid_response_length - 1] = score
@@ -112,7 +115,7 @@ class NaiveRewardManager:
                 already_print_data_sources[data_source] += 1
                 print("[prompt]", prompt_str)
                 print("[response]", response_str)
-                print("[ground_truth]", ground_truth)
+                print("[ground_truth]", 0)
                 print("[score]", score)
 
         return reward_tensor

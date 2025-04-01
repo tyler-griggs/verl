@@ -776,12 +776,12 @@ class RayPPOTrainer(object):
 
         # perform validation before training
         # currently, we only support validation using the reward_function.
-        if self.val_reward_fn is not None and self.config.trainer.get('val_before_train', True):
-            val_metrics = self._validate()
-            pprint(f'Initial validation metrics: {val_metrics}')
-            logger.log(data=val_metrics, step=self.global_steps)
-            if self.config.trainer.get('val_only', False):
-                return
+        # if self.val_reward_fn is not None and self.config.trainer.get('val_before_train', True):
+        #     val_metrics = self._validate()
+        #     pprint(f'Initial validation metrics: {val_metrics}')
+        #     logger.log(data=val_metrics, step=self.global_steps)
+        #     if self.config.trainer.get('val_only', False):
+        #         return
 
         # add tqdm
         progress_bar = tqdm(total=self.total_training_steps, initial=self.global_steps, desc="Training Progress")
@@ -813,8 +813,21 @@ class RayPPOTrainer(object):
 
                 with _timer('step', timing_raw):
                     # generate a batch
+                    
                     with _timer('gen', timing_raw):
+                        self.actor_rollout_wg.transition_to_rollout()
+                        # current_batch = self._buffered_generate_next_batch(timing_raw)
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                        gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                        gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                        gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                        self.actor_rollout_wg.transition_to_actor()
+
+                    # try:
+                    #     print(f'TGRIGGS: Writing gen_batch_output to disk for step {self.global_steps} to file /mnt/user_storage/logs/data_protos/vanilla2/step{self.global_steps}/gen_batch_output')
+                    #     gen_batch_output.save_to_disk(f'/mnt/user_storage/logs/data_protos/vanilla2/step{self.global_steps}/gen_batch_output')
+                    # except: 
+                    #     print(f'TGRIGGS: Failed to gen_batch_output to disk for step {self.global_steps}.')
 
                     if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                         with _timer('gen_max', timing_raw):

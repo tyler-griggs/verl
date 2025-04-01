@@ -481,8 +481,60 @@ class ActorRolloutRefWorker(Worker):
 
         return output
 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def transition_to_rollout(self):
+        log_gpu_memory_usage('TGRIGGS: transition_to_rollout: before param onload ', logger=None)
+        # Load actor model, if needed
+        if self._is_offload_param:
+            load_fsdp_model_to_gpu(self.actor_module_fsdp)
+        log_gpu_memory_usage('TGRIGGS: transition_to_rollout: after param onload ', logger=None)
+ 
+        # Sync actor model to rollout worker
+        self.rollout_sharding_manager.enter()
+ 
+        # Offload actor model and opt, if needed
+        if self._is_offload_param:
+            offload_fsdp_model_to_cpu(self.actor_module_fsdp)
+        if self._is_offload_optimizer:
+            offload_fsdp_optimizer(optimizer=self.actor_optimizer)
+        self.rollout.inference_engine.init_cache_engine()
+        
+ 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def transition_to_actor(self):
+        # Offload vllm engine
+        self.rollout.inference_engine.free_cache_engine()
+        self.rollout_sharding_manager.exit()
+
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def generate_sequences(self, prompts: DataProto):
+         prompts = prompts.to('cuda')
+         assert self._is_rollout
+ 
+         prompts.batch = prompts.batch.cuda()
+         meta_info = {
+             'eos_token_id':
+                 self.generation_config.eos_token_id
+                 if self.generation_config is not None else self.tokenizer.eos_token_id,
+             'pad_token_id':
+                 self.generation_config.pad_token_id
+                 if self.generation_config is not None else self.tokenizer.pad_token_id,
+         }
+         prompts.meta_info.update(meta_info)
+ 
+         prompts = self.rollout_sharding_manager.preprocess_data(prompts)
+         output = self.rollout.generate_sequences(prompts=prompts)
+         output = self.rollout_sharding_manager.postprocess_data(output)
+ 
+         output = output.to('cpu')
+ 
+         # clear kv cache
+         torch.cuda.empty_cache()
+         logger.info(f'Exiting generate_sequences')
+         return output
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def old_generate_sequences(self, prompts: DataProto):
         # Support all hardwares
         prompts = prompts.to(torch.cuda.current_device())
 
