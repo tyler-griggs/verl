@@ -36,6 +36,7 @@ from openhands.core.config.condenser_config import (
 )
 from openhands.llm.fn_call_converter import (
     convert_fncall_messages_to_non_fncall_messages,
+    convert_non_fncall_messages_to_fncall_messages,
 )
 from openhands.llm.llm import LLM
 from openhands.utils.prompt import PromptManager
@@ -112,6 +113,7 @@ class BatchManager:
         self.vllm_engine = vllm_engine
         self.tokenizer = tokenizer
         self.max_batch_size = max_batch_size
+        self.prev_end_time = None
         
         # Queue for new generation requests
         self.request_queue = asyncio.Queue()
@@ -148,7 +150,7 @@ class BatchManager:
         if not self.is_running:
             self.start()
     
-    async def add_request(self, instance_id, trajectory_id, messages):
+    async def add_request(self, instance_id, trajectory_id, pos_id, messages):
         """Add a generation request to the batch queue"""
         # Ensure the processing loop is running
         await self.ensure_started()
@@ -166,6 +168,7 @@ class BatchManager:
         request = {
             'instance_id': instance_id,
             'trajectory_id': trajectory_id,
+            'pos_id': pos_id,
             'agent_key': agent_key,
             'input_ids': input_ids,
             'future': future,
@@ -246,22 +249,6 @@ class BatchManager:
                         request = await self.request_queue.get()
                         batch_requests.append(request)
                     
-                    # If we have fewer requests than max_batch_size, pad with dummy requests
-                    if batch_requests and len(batch_requests) < self.max_batch_size:
-                        need_padding = self.max_batch_size - len(batch_requests)
-                        logger.info(f"Padding final batch with {need_padding} dummy requests")
-                        
-                        # Use the first request as a template for padding
-                        template_request = batch_requests[0].copy()
-                        
-                        # Create dummy requests to fill the batch
-                        for i in range(need_padding):
-                            dummy_agent_key = ('dummy', f'pad-{i}')
-                            dummy_request = template_request.copy()
-                            dummy_request['instance_id'] = 'dummy'
-                            dummy_request['trajectory_id'] = f'pad-{i}'
-                            dummy_request['agent_key'] = dummy_agent_key
-                            batch_requests.append(dummy_request)
                 else:
                     # For normal batches, only process if we have enough to fill a batch
                     # or if we've been waiting too long (would need additional tracking)
@@ -270,14 +257,38 @@ class BatchManager:
                     # Only process a full batch or nothing
                     if queue_size >= self.max_batch_size:
                         batch_size = self.max_batch_size
-                        logger.info(f"Processing full batch: taking {batch_size} requests from queue (total: {queue_size})")
+                        print(f"Processing full batch: taking {batch_size} requests from queue (total: {queue_size})")
                         
                         for _ in range(batch_size):
                             request = await self.request_queue.get()
                             batch_requests.append(request)
                 
+                ordered_batch_requests = [None] * self.max_batch_size
+                
                 # Process the batch if we have any requests
                 if batch_requests:
+                    # reorder the requests according to pos-id in the batch to increase cache hit rate
+                    for request in batch_requests:
+                        pos_id = request.get('pos_id')
+                        assert pos_id < self.max_batch_size
+                        ordered_batch_requests[pos_id] = request
+                    
+                    # Get a template for dummy requests (use the first real request)
+                    template_request = batch_requests[0].copy()
+                    
+                    # Fill empty positions with dummy requests
+                    for i in range(self.max_batch_size):
+                        if ordered_batch_requests[i] is None:
+                            dummy_agent_key = ('dummy', f'pad-{i}')
+                            dummy_request = template_request.copy()
+                            dummy_request['instance_id'] = 'dummy'
+                            dummy_request['trajectory_id'] = f'pad-{i}'
+                            dummy_request['agent_key'] = dummy_agent_key
+                            dummy_request['pos_id'] = i
+                            ordered_batch_requests[i] = dummy_request
+                    
+                    batch_requests = ordered_batch_requests
+
                     agent_keys = [f"({req['instance_id']}, {req['trajectory_id']})" for req in batch_requests 
                                 if req['instance_id'] != 'dummy']
                     logger.info(f"Processing batch of {len(agent_keys)} real requests")
@@ -325,12 +336,21 @@ class BatchManager:
             prompts = DataProto(batch=batch)
             
             # Generate responses using the engine
+            import time
+            start_time = time.time()
+            if self.prev_end_time != None:
+                logger.info(f"TGRIGGS: Env interaction + waiting took {start_time - self.prev_end_time:.2f} seconds")
             response = self.vllm_engine.generate_sequences(prompts)
+            end_time = time.time()
+            logger.info(f"TGRIGGS: Batch generation took {end_time - start_time:.2f} seconds")
+            self.prev_end_time = end_time
             
             # Process results - only for real requests, not padding requests
-            real_requests = [req for req in batch_requests if req['instance_id'] != 'dummy']
+            # real_requests = [req for req in batch_requests if req['instance_id'] != 'dummy']
             
-            for i, req in enumerate(real_requests):
+            for i, req in enumerate(batch_requests):
+                if req['instance_id'] == 'dummy':
+                    continue
                 agent_key = req['agent_key']
                 instance_id = req['instance_id']
                 trajectory_id = req['trajectory_id']
@@ -341,6 +361,7 @@ class BatchManager:
                     response_str = self.tokenizer.decode(response_ids, skip_special_tokens=True)
                     logger.info(f"Response for agent ({instance_id}, {trajectory_id}): {response_str}")
                 else:
+                    assert False
                     response_str = ""  # Handle case where response is missing
                 
                 # Store result by agent key
@@ -352,9 +373,6 @@ class BatchManager:
                 logger.info(f"Completed response for agent ({instance_id}, {trajectory_id})")
                 current_loop = asyncio.get_running_loop()
                 logger.info(f"process batch in event loop: {id(current_loop)}")
-            
-            # Mark all processed real requests as done
-            for req in real_requests:
                 self.request_queue.task_done()
                 
         except Exception as e:
@@ -502,6 +520,9 @@ class OnlineCodeActAgent(Agent):
         self.instruction = None
         self.config = None
 
+    def bind_to_process(self, pos_id: int):
+        self.pos_id = pos_id
+
     def close(self):
         """Close the agent runtime."""
         if self.runtime:
@@ -564,20 +585,27 @@ class OnlineCodeActAgent(Agent):
         
         return messages
 
+    
     # Conversion utility function
-    def convert_str_to_completion_format(self, response_str):
-        from types import SimpleNamespace
-        return SimpleNamespace(
+    def convert_str_to_completion_format(self, fn_call_messages):
+        # from types import SimpleNamespace
+        from litellm import ModelResponse
+
+        role = fn_call_messages[0]['role']
+        response_str = fn_call_messages[0]['content']
+        tool_calls = fn_call_messages[0].get('tool_calls', None)
+        
+        return ModelResponse(
             choices=[
-                SimpleNamespace(
-                    index=0,
-                    message=SimpleNamespace(
-                        content=response_str,
-                        role="assistant",
-                        tool_calls=None,
-                        function_calling=None
-                    )
-                )
+                {
+                    "index": 0,
+                    "message": {
+                        "content": response_str,
+                        "role": role,
+                        "tool_calls": tool_calls,
+                        "function_calling": None
+                    }
+                }
             ]
         )
 
@@ -606,6 +634,7 @@ class OnlineCodeActAgent(Agent):
             future = await self.batch_manager.add_request(
                 self.instance_id,
                 self.trajectory_id,
+                self.pos_id,
                 messages
             )
             
@@ -628,8 +657,17 @@ class OnlineCodeActAgent(Agent):
                 )
             else:
                 # Convert to actions
+                message = [
+                    {
+                        'role': 'assistant',
+                        'content': response_str,
+                    }
+                ]
+                fn_call_messages = convert_non_fncall_messages_to_fncall_messages(
+                    message, self.tools
+                )
                 actions = codeact_function_calling.response_to_actions(
-                    self.convert_str_to_completion_format(response_str)
+                    self.convert_str_to_completion_format(fn_call_messages)
                 )
                 logger.info(f"Take actions: {actions}")
                 
@@ -637,7 +675,7 @@ class OnlineCodeActAgent(Agent):
                     self.pending_actions.append(action)
         
         except Exception as e:
-            logger.error(f"Error in agent step: {str(e)}")
+            logger.error(f"Error in agent step for agent ({self.instance_id}, {self.trajectory_id}): {str(e)}")
             # Handle errors gracefully by creating a message action
             self.pending_actions.append(
                 MessageAction(
@@ -739,6 +777,19 @@ class CodeActAgentGroup:
         git_patch_list = []
         success_list = []
         error_list = []
+
+        base_dir = "/mnt/user_storage/logs/results/10"
+        for instance_id, trajs in self.results.items():
+            for trajectory, data in trajs.items():
+                # Build and create directory
+                out_dir = os.path.join(base_dir, str(instance_id), str(trajectory))
+                os.makedirs(out_dir, exist_ok=True)
+
+                # Write results dict to file
+                file_path = os.path.join(out_dir, "results.txt")
+                print(f'Logging results for ({instance_id}, {trajectory}) to {file_path}')
+                with open(file_path, "w") as f:
+                    json.dump(data, f, indent=2, default=str)
         
         # Create a mapping of instance_id -> list of trajectories
         instance_trajectories = {}
@@ -760,6 +811,37 @@ class CodeActAgentGroup:
                 instance_list.extend([instance] * len(traj_results))
         
         assert len(matched_results) == self.num_trajectories * len(self.batch), f"Expected number of results {self.num_trajectories * len(self.batch)}, got {len(matched_results)}"
+        
+        # Group results by instance_id for message handling
+        results_by_instance = {}
+        for i, result in enumerate(matched_results):
+            instance_id = instance_list[i]['instance_id']
+            if instance_id not in results_by_instance:
+                results_by_instance[instance_id] = []
+            results_by_instance[instance_id].append((i, result))
+        
+        # Handle empty messages by copying from another trajectory of the same instance
+        for instance_id, results in results_by_instance.items():
+            # Find a valid messages list to use as fallback
+            valid_messages = None
+            valid_patch = None
+            for _, result in results:
+                messages = result.get('messages', [])
+                if messages and len(messages) > 0:
+                    valid_messages = messages
+                    valid_patch = result.get('git_patch', None)
+                    break
+            
+            # If we found valid messages, use them for trajectories with empty messages
+            if valid_messages:
+                for idx, result in results:
+                    if not result.get('messages') or len(result.get('messages', [])) == 0:
+                        # Copy messages from the valid trajectory
+                        matched_results[idx]['messages'] = valid_messages.copy()
+                        matched_results[idx]['git_patch'] = valid_patch
+            else:
+                print(f"There are no valid_messages for agent {instance_id}")
+        
         # Get batch of messages
         all_messages = []
         all_prompts = []
@@ -773,38 +855,56 @@ class CodeActAgentGroup:
                 if msg["role"] == 'assistant':
                     starting_index = i
                     break
+            if starting_index == 0:
+                # If we don't find an assistant, all messages are prompts and there are no responses
+                print(f'ERROR: Found no assistant message. len(messages) == {len(messages)} and roles are {[msg["role"] for msg in messages]}')
+                starting_index = len(messages)
             prompt = messages[:starting_index]
             all_prompts.append(prompt)
             response = messages[starting_index:]
             all_responses.append(response)
-
+            if len(prompt) == 0:
+                print(f'ERROR: Prompt is empty before apply_chat_template')
+            if len(response) == 0:
+                print(f'ERROR: Response is empty before apply_chat_template')
 
             # Also add non-tensor data
             git_patch_list.append(result.get('git_patch', None))
             success_list.append(not result.get('success', True))  # Inverting as per original requirement
             error_list.append(result.get('error', None))
         
-        # Encode messages, get assitant mask and position ids
-        prompt_encodings = self.tokenizer.apply_chat_template(
-            all_prompts, 
-            return_tensors="pt",
-            add_generation_prompt=False,
-            return_dict=True,
-            padding=True
-        )
+        # Conditions where a prompt can be empty:
+        # 1) No assistant message found (printing this case)
+        # 2) 'messages' is empty so no assistant or non-assistant message found (printing this case)
+
+        try:
+            # Encode messages, get assitant mask and position ids
+            prompt_encodings = self.tokenizer.apply_chat_template(
+                all_prompts, 
+                return_tensors="pt",
+                add_generation_prompt=False,
+                return_dict=True,
+                padding=True
+            )
+        except Exception as e:
+            print(f'apply_chat_template failed with error: {e}. The prompts are: {all_prompts}')
         prompt_input_ids = prompt_encodings['input_ids']
         prompt_attention_mask = prompt_encodings['attention_mask']
         prompt_input_ids, prompt_attention_mask = convert_right_padding_to_left(prompt_input_ids, prompt_attention_mask)
 
-        response_encodings = self.tokenizer.apply_chat_template(
-            all_responses,
-            chat_template=chat_template,
-            return_tensors="pt",
-            return_assistant_tokens_mask=True,
-            add_generation_prompt=False,
-            return_dict=True,
-            padding=True
-        )
+        try:
+            response_encodings = self.tokenizer.apply_chat_template(
+                all_responses,
+                chat_template=chat_template,
+                return_tensors="pt",
+                return_assistant_tokens_mask=True,
+                add_generation_prompt=False,
+                return_dict=True,
+                padding=True
+            )
+        except Exception as e:
+            print(f'apply_chat_template failed with error: {e}. The responses are: {all_prompts}')
+
         response_ids = response_encodings['input_ids']
         response_attention_mask = response_encodings['attention_mask']
         response_assistant_mask = torch.tensor(response_encodings['assistant_masks'])
@@ -827,6 +927,9 @@ class CodeActAgentGroup:
         
         # Create non-tensor dictionary
         non_tensor_dict = {
+            'all_prompts': all_prompts,
+            'all_responses': all_responses,
+            'all_messages': all_messages,
             'git_patch': git_patch_list,
             'success': success_list,
             'error': error_list,
@@ -956,13 +1059,16 @@ class CodeActAgentGroup:
             agent.agent_state = AgentState.ERROR
             raise
     
-    async def _run_agent(self, batch_id: int, trajectory_id: int) -> Dict[str, Any]:
+    async def _run_agent(self, batch_id: int, trajectory_id: int, pos_id: int) -> Dict[str, Any]:
         instance_id = self.batch[batch_id].non_tensor_batch['instance']['instance_id']
         """Run a single agent to completion and return the results."""
         agent = self.agents[instance_id][trajectory_id]
+        agent.bind_to_process(pos_id)
         assert agent is not None
         instance = pd.Series(self.batch[batch_id].non_tensor_batch['instance'])
         runtime = agent.runtime
+
+        state = None
         
         try:
             # Run the agent controller
@@ -987,6 +1093,17 @@ class CodeActAgentGroup:
             # Complete the runtime and get the git patch
             return_val = await call_sync_from_async(complete_runtime, runtime, instance)
             # return_val = complete_runtime(runtime, instance)
+            # print patch
+            if return_val.get('git_patch', None):
+                print(f"Git patch for instance {instance_id}, traj {trajectory_id}:")
+                print('-' * 80)
+                print(return_val['git_patch'])
+                print('-' * 80)
+            else:
+                print(f"Git patch for instance {instance_id}, traj {trajectory_id} is empty (None)")
+
+            if not final_messages or len(final_messages) == 0:
+                print(f'Final messages are non-existent (or empty) for instance {instance_id}, trajectory {trajectory_id}')
                 
             return {
                 'instance_id': instance_id,
@@ -1002,11 +1119,20 @@ class CodeActAgentGroup:
             # Update agent state to reflect error
             agent.error = str(e)
             agent.agent_state = AgentState.ERROR
+
+            if state:
+                final_messages = agent.get_final_messages(state)
+            else:
+                print(f'No final message state for instance {instance_id}, trajectory {trajectory_id}')
+                final_messages = []
+
+            if not final_messages or len(final_messages) == 0:
+                print(f'1095: Final messages are non-existent (or empty) for instance {instance_id}, trajectory {trajectory_id}')
             
             return {
                 'instance_id': instance_id,
                 'trajectory_id': trajectory_id,
-                'messages': [],
+                'messages': final_messages,
                 'state': None,
                 'git_patch': None,
                 'success': False,
@@ -1019,6 +1145,148 @@ class CodeActAgentGroup:
                     runtime.close()
                 except Exception as e:
                     logger.warning(f"Error closing runtime for instance {instance_id}: {str(e)}")
+    
+    # async def generate_trajectories_pipeline(self) -> Dict[int, Dict[int, Dict[str, Any]]]:
+    async def generate_trajectories_pipeline(self) -> DataProto:
+        """
+        Generate trajectories with pipelined runtime initialization to improve efficiency.
+        """
+        total_instances = len(self.batch)
+        print("Total instances:", total_instances)
+        
+        # Initialize the batch manager's processing task
+        await self.initialize_batch_manager()
+        
+        # Create two queues: one for initialization and one for running
+        init_queue = asyncio.Queue()
+        run_queue = asyncio.Queue(maxsize=self.max_parallel_agents)
+        
+        # Fill the initialization queue
+        for trajectory_id in range(self.num_trajectories):
+            for batch_idx in range(total_instances):
+                await init_queue.put((batch_idx, trajectory_id))
+        
+        # Track active tasks
+        active_init_tasks = set()
+        active_run_tasks = set()
+        need_init_tasks = self.num_trajectories * total_instances
+        needed_run_tasks = self.num_trajectories * total_instances  # Total tasks we'll eventually need   
+        
+        # Helper function to initialize runtime
+        import time
+        async def initialize_one_runtime():
+            start_time = time.time()
+            batch_idx, trajectory_id = await init_queue.get()
+            instance_id = self.batch[batch_idx].non_tensor_batch['instance']['instance_id']
+            try:
+                logger.info(f"Initializing runtime for instance {instance_id}, trajectory {trajectory_id}")
+                await self._initialize_runtime_for_agent(batch_idx, trajectory_id)
+                # Add to run queue after successful initialization
+                await run_queue.put((batch_idx, trajectory_id))
+                elpased_time = time.time() - start_time
+                print(f"Successfully initialized runtime for instance {instance_id}, trajectory {trajectory_id} in {elpased_time:.2f} seconds")
+            except Exception as e:
+                nonlocal needed_run_tasks
+                needed_run_tasks -= 1
+                logger.error(f"Error initializing runtime for {instance_id}, trajectory {trajectory_id}: {str(e)}")
+                # Handle initialization error
+                if instance_id not in self.results:
+                    self.results[instance_id] = {}
+                self.results[instance_id][trajectory_id] = {
+                    'instance_id': instance_id,
+                    'trajectory_id': trajectory_id,
+                    'messages': [],
+                    'state': None,
+                    'git_patch': None,
+                    'success': False,
+                    'error': f"Initialization error: {str(e)}"
+                }
+            finally:
+                init_queue.task_done()
+                # Start another initialization task if available
+                nonlocal need_init_tasks
+                if not init_queue.empty() and need_init_tasks > 0:
+                    need_init_tasks -= 1
+                    task = asyncio.create_task(initialize_one_runtime())
+                    active_init_tasks.add(task)
+                    task.add_done_callback(lambda t: active_init_tasks.discard(t))
+        
+        # Helper function to run one agent
+        async def run_one_agent(pos_id: int):
+            batch_idx, trajectory_id = await run_queue.get()
+            instance_id = self.batch[batch_idx].non_tensor_batch['instance']['instance_id']
+            start_time = time.time()
+            try:
+                logger.info(f"Running agent for instance {instance_id}, trajectory {trajectory_id}")
+                result = await self._run_agent(batch_idx, trajectory_id, pos_id)
+                elapsed = time.time() - start_time
+                
+                # Store the result
+                if instance_id not in self.results:
+                    self.results[instance_id] = {}
+                self.results[instance_id][trajectory_id] = result
+                
+                print(f"Successfully completed instance {instance_id}, trajectory {trajectory_id} in {elapsed:.2f}s")
+            except Exception as e:
+                logger.error(f"Error running agent for {instance_id}, trajectory {trajectory_id}: {str(e)}")
+                # Store error result
+                if instance_id not in self.results:
+                    self.results[instance_id] = {}
+                self.results[instance_id][trajectory_id] = {
+                    'instance_id': instance_id,
+                    'trajectory_id': trajectory_id,
+                    'messages': [],
+                    'state': None,
+                    'git_patch': None,
+                    'success': False,
+                    'error': str(e)
+                }
+            finally:
+                run_queue.task_done()
+                nonlocal needed_run_tasks
+                # Start another run task if available
+                if needed_run_tasks > 0:
+                    needed_run_tasks -= 1
+                    task = asyncio.create_task(run_one_agent(pos_id))
+                    active_run_tasks.add(task)
+                    task.add_done_callback(lambda t: active_run_tasks.discard(t))
+                else:
+                    # Queue is empty - this indicates we're processing the final batch
+                    logger.info("Task queue is empty - processing the final batch of tasks")
+                    # Notify the batch manager that this is the final batch
+                    await self.batch_manager.notify_final_batch()
+        
+        # Start initial batch of initialization tasks
+        max_parallel_init = self.max_parallel_agents  # Use some parallel initialization tasks
+        for _ in range(min(max_parallel_init, init_queue.qsize())):
+            need_init_tasks -= 1
+            task = asyncio.create_task(initialize_one_runtime())
+            active_init_tasks.add(task)
+            task.add_done_callback(lambda t: active_init_tasks.discard(t))
+        
+        # Start a few agent run tasks (they'll wait on the run_queue)
+        for pos_id in range(self.max_parallel_agents):
+            needed_run_tasks -= 1
+            task = asyncio.create_task(run_one_agent(pos_id))
+            active_run_tasks.add(task)
+            task.add_done_callback(lambda t: active_run_tasks.discard(t))
+        
+        # Wait for all initialization tasks to complete
+        if init_queue.qsize() > 0:
+            await init_queue.join()
+        
+        # Wait for all run tasks to complete
+        if run_queue.qsize() > 0:
+            await run_queue.join()
+        
+        # Wait for any remaining active tasks
+        all_tasks = active_init_tasks.union(active_run_tasks)
+        if all_tasks:
+            logger.info(f"Waiting for {len(all_tasks)} (init: {len(active_init_tasks)}, run: {len(active_run_tasks)}) remaining tasks to complete")
+            await asyncio.wait(all_tasks)
+        
+        results_dataproto = self._convert_results_to_dataproto()
+        return results_dataproto
     
     async def generate_trajectories(self) -> Dict[int, Dict[int, Dict[str, Any]]]:
         """
@@ -1039,8 +1307,8 @@ class CodeActAgentGroup:
         
         # Create a queue of all (instance_id, trajectory_id) pairs
         task_queue = asyncio.Queue()
-        for batch_idx in range(total_instances):
-            for trajectory_id in range(self.num_trajectories):
+        for trajectory_id in range(self.num_trajectories):
+            for batch_idx in range(total_instances):
                 await task_queue.put((batch_idx, trajectory_id))
         
         # Keep track of active tasks
@@ -1072,14 +1340,21 @@ class CodeActAgentGroup:
                 # Store error result
                 if instance_id not in self.results:
                     self.results[instance_id] = {}
-                self.results[instance_id][trajectory_id] = {
-                    'instance_id': instance_id,
-                    'trajectory_id': trajectory_id,
-                    'state': None,
-                    'git_patch': None,
-                    'success': False,
-                    'error': str(e)
-                }
+                if trajectory_id not in self.results[instance_id]:
+                    self.results[instance_id][trajectory_id] = {}
+                    # retry for once
+                    await task_queue.put((batch_idx, trajectory_id))
+                else:
+                    self.results[instance_id][trajectory_id] = {
+                        'instance_id': instance_id,
+                        'trajectory_id': trajectory_id,
+                        'messages': [],
+                        'state': None,
+                        'git_patch': None,
+                        'success': False,
+                        'error': str(e)
+                    }
+                
             finally:
                 # Clean up any resources
                 try:
@@ -1090,7 +1365,8 @@ class CodeActAgentGroup:
                     logger.warning(f"Error during cleanup for {instance_id}, trajectory {trajectory_id}: {cleanup_error}")
                 
                 # Mark task as done
-                logger.info(f"Task done for instance {instance_id}, trajectory {trajectory_id}")
+                queue_size = task_queue.qsize()
+                print(f"Task done for instance {instance_id}, trajectory {trajectory_id}. Queue size: {queue_size}")
                 task_queue.task_done()
                 
                 # Important: Launch a new task to replace this one
@@ -1129,7 +1405,9 @@ class CodeActAgentGroup:
         results_dataproto = self._convert_results_to_dataproto()
         return results_dataproto
     
-    def run(self) -> Dict[int, Dict[int, Dict[str, Any]]]:
+    
+    # def run(self) -> Dict[int, Dict[int, Dict[str, Any]]]:
+    def run(self) -> DataProto:
         """
         Run the agent group synchronously by creating a new event loop if necessary.
         
@@ -1146,7 +1424,7 @@ class CodeActAgentGroup:
             
         # Run the generate_trajectories coroutine in the event loop
         try:
-            return loop.run_until_complete(self.generate_trajectories())
+            return loop.run_until_complete(self.generate_trajectories_pipeline())
         finally:
             # Close the batch manager to ensure cleanup
             self.close()

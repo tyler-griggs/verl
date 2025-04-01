@@ -13,11 +13,16 @@ from typing import cast
 
 import pandas as pd
 from datasets import Dataset, load_dataset, load_from_disk
-from swebench.harness.grading import get_eval_report
-from swebench.harness.run_evaluation import (
+from swegym.harness.grading import get_eval_report
+from swegym.harness.run_evaluation import (
     APPLY_PATCH_FAIL,
     APPLY_PATCH_PASS,
 )
+# from swebench.harness.grading import get_eval_report
+# from swebench.harness.run_evaluation import (
+#     APPLY_PATCH_FAIL,
+#     APPLY_PATCH_PASS,
+# )
 
 from openhands.core.config import (
     AppConfig,
@@ -154,6 +159,7 @@ def process_git_patch(patch):
 
     if not patch.strip():
         # skip empty patches
+        print(f'Skipping empty patch....')
         return ''
 
     patch = patch.replace('\r\n', '\n')
@@ -385,4 +391,3 @@ def compute_score(
             # )
     finally:
         runtime.close()
-

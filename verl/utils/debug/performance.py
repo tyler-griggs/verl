@@ -22,7 +22,11 @@ def log_gpu_memory_usage(head: str, logger: logging.Logger = None, level=logging
         memory_allocated = torch.cuda.memory_allocated() / 1024**3
         memory_reserved = torch.cuda.memory_reserved() / 1024**3
 
-        message = f'{head}, memory allocated (GB): {memory_allocated}, memory reserved (GB): {memory_reserved}'
+        # message = f'{head}, memory allocated (GB): {memory_allocated}, memory reserved (GB): {memory_reserved}'
+        free_mem, total_mem = torch.cuda.mem_get_info()
+        used_mem = (total_mem - free_mem) / 1024**3  # Convert bytes to GB
+ 
+        message = f'{head}, memory allocated (GB): {memory_allocated} (real used: {used_mem}), memory reserved (GB): {memory_reserved}'
 
         if logger is None:
             print(message)

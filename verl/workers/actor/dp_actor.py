@@ -141,8 +141,8 @@ class DataParallelPPOActor(BasePPOActor):
                                            seqlen=seqlen)
 
                 # only return response part:
-                entropy = full_entropy.squeeze(-1)[:, -response_length - 1:-1]  # (bsz, response_length)
-                log_probs = full_log_probs.squeeze(-1)[:, -response_length - 1:-1]  # (bsz, response_length)
+                entropy = full_entropy.squeeze(-1)[:, -response_length-1:-1]  # (bsz, response_length)
+                log_probs = full_log_probs.squeeze(-1)[:, -response_length-1:-1]  # (bsz, response_length)
 
             else:  # not using rmpad and no ulysses sp
                 output = self.actor_module(input_ids=input_ids,
