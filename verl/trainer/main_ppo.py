@@ -14,7 +14,7 @@
 """
 Note that we don't combine the main with ray_trainer as ray_trainer is used by other main.
 """
-from verl.trainer.ppo.ray_trainer import RayPPOTrainer
+from verl.trainer.ppo.codeact_trainer import CodeActTrainer
 
 import os
 import ray
@@ -141,34 +141,37 @@ class TaskRunner:
             role_worker_mapping[Role.RewardModel] = ray.remote(RewardModelWorker)
             mapping[Role.RewardModel] = global_pool_id
 
-        reward_manager_name = config.reward_model.get("reward_manager", "naive")
-        if reward_manager_name == 'naive':
-            from verl.workers.reward_manager import NaiveRewardManager
-            reward_manager_cls = NaiveRewardManager
-        elif reward_manager_name == 'prime':
-            from verl.workers.reward_manager import PrimeRewardManager
-            reward_manager_cls = PrimeRewardManager
-        else:
-            raise NotImplementedError
+    reward_manager_name = config.reward_model.get("reward_manager", "naive")
+    if reward_manager_name == 'naive':
+        from verl.workers.reward_manager import NaiveRewardManager
+        reward_manager_cls = NaiveRewardManager
+    elif reward_manager_name == 'swebench':
+        from verl.workers.reward_manager import SWEBenchRewardManager
+        reward_manager_cls = SWEBenchRewardManager
+    elif reward_manager_name == 'prime':
+        from verl.workers.reward_manager import PrimeRewardManager
+        reward_manager_cls = PrimeRewardManager
+    else:
+        raise NotImplementedError
 
-        compute_score = get_custom_reward_fn(config)
-        reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0, compute_score=compute_score)
+    compute_score = get_custom_reward_fn(config)
+    reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0, compute_score=compute_score, config=config)
 
         # Note that we always use function-based RM for validation
         val_reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1, compute_score=compute_score)
 
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
 
-        trainer = RayPPOTrainer(config=config,
-                                tokenizer=tokenizer,
-                                processor=processor,
-                                role_worker_mapping=role_worker_mapping,
-                                resource_pool_manager=resource_pool_manager,
-                                ray_worker_group_cls=ray_worker_group_cls,
-                                reward_fn=reward_fn,
-                                val_reward_fn=val_reward_fn)
-        trainer.init_workers()
-        trainer.fit()
+    trainer = CodeActTrainer(config=config,
+                            tokenizer=tokenizer,
+                            processor=processor,
+                            role_worker_mapping=role_worker_mapping,
+                            resource_pool_manager=resource_pool_manager,
+                            ray_worker_group_cls=ray_worker_group_cls,
+                            reward_fn=reward_fn,
+                            val_reward_fn=val_reward_fn)
+    trainer.init_workers()
+    trainer.fit()
 
 
 if __name__ == '__main__':

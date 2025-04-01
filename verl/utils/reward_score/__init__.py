@@ -22,27 +22,29 @@ def _default_compute_score(data_source, solution_str, ground_truth, extra_info=N
     # from . import math
     # res = math.compute_score(solution_str, ground_truth)
 
-        # [Optional] Math-Verify Integration
-        # For enhanced accuracy, consider utilizing Math-Verify (https://github.com/huggingface/Math-Verify).
-        # Note: Math-Verify needs to be manually installed via pip: `pip install math-verify`.
-        # To use it, override the `compute_score` function with the following implementation:
-
-        # from . import math_verify
-        # res = math_verify.compute_score(solution_str, ground_truth)
-    # elif data_source in [
-    #         'numina_aops_forum', 'numina_synthetic_math', 'numina_amc_aime', 'numina_synthetic_amc', 'numina_cn_k12',
-    #         'numina_olympiads'
-    # ]:
-    #     from . import prime_math
-    #     res = prime_math.compute_score(solution_str, ground_truth)
-    # elif data_source in ['codecontests', 'apps', 'codeforces', 'taco']:
-    #     from . import prime_code
-    #     res = prime_code.compute_score(solution_str, ground_truth, continuous=True)
-    # elif data_source in ['hiyouga/geometry3k']:
-    #     from . import geo3k
-    #     res = geo3k.compute_score(solution_str, ground_truth)
-    # else:
-    #     raise NotImplementedError
+        # Use Math-Verify (https://github.com/huggingface/Math-Verify) for better evaluation accuracy
+        from . import math_verify
+        res = math_verify.compute_score(solution_str, ground_truth)
+    elif data_source in [
+            'numina_aops_forum', 'numina_synthetic_math', 'numina_amc_aime', 'numina_synthetic_amc', 'numina_cn_k12',
+            'numina_olympiads'
+    ]:
+        from . import prime_math
+        res = prime_math.compute_score(solution_str, ground_truth)
+    elif data_source in ['codecontests', 'apps', 'codeforces', 'taco']:
+        from . import prime_code
+        res = prime_code.compute_score(solution_str, ground_truth, continuous=True)
+    elif data_source in ['hiyouga/geometry3k']:
+        from . import geo3k
+        res = geo3k.compute_score(solution_str, ground_truth)
+    elif data_source in ["princeton-nlp/SWE-bench_Verified", "princeton-nlp/SWE-bench_Lite", "princeton-nlp/SWE-bench", "SWE-Gym/SWE-Gym"]:
+        from . import openhands_swebench
+        assert extra_info is not None and 'instance_id' in extra_info, "instance_id is required for openhands_swebench"
+        # assume that the instance id is in the extra_info
+        # print(f"Inside reward score init: calling into compute score")
+        res = openhands_swebench.compute_score(solution_str, ground_truth, extra_info['instance_id'], data_source)
+    else:
+        raise NotImplementedError
 
     # if isinstance(res, (int, float, bool)):
     #     return float(res)
