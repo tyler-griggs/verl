@@ -112,9 +112,9 @@ class RewardManager():
 
         verifier_reward=torch.zeros_like(data.batch['responses'], dtype=torch.float32)
 
-        prompt_ids = data_item.batch['prompts']
-        prompt_length = prompt_ids.shape[-1]
-        valid_response_length = data_item.batch['attention_mask'][prompt_length:].sum(-1)
+        response_ids = data.batch['responses']
+        response_length = response_ids.shape[-1]
+        valid_response_length = data.batch['attention_mask'][:, -response_length:].sum(-1)
         
         # if the batch already contains evaluation results, the verification is skipped here.
         if 'acc' in data.batch:

@@ -1,17 +1,4 @@
 set -x
-# source /root/miniconda3/etc/profile.d/conda.sh
-# conda activate sky-t1-rl
-# export HF_HOME="/shared/sycao/hf_cache"
-# export NCCL_DEBUG=WARN
-# export WANDB_API_KEY='e357e4ac1b5cace6b76e7857c2d97f6a84405006'
-# export VLLM_ATTENTION_BACKEND=FLASH_ATTN
-# export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-# export TOKENIZERS_PARALLELISM=true
-# export ALLHANDS_API_KEY="sycao-sandbox-remote"
-# export SANDBOX_REMOTE_RUNTIME_API_URL="http://150.136.52.109:8000"
-# export SANDBOX_REMOTE_RUNTIME_API_URL="http://aa5c04af510464a9aa96b1c17a6f178c-702829876.us-west-2.elb.amazonaws.com:3000/"
-# export LOG_LEVEL=ERROR
-
 
 PROJECT_NAME='tg-oh'
 EXPERIMENT_NAME='oh-offline-32b-2node-debugging'
@@ -31,17 +18,17 @@ SFT_MODEL_PATH='/mnt/user_storage/models/OpenHands-32B-Agent'
 
 NNODES=2
 FG_TRANSFER=False
-NUM_TRAJ=2
-MAX_ITER=2
-MAX_AGENTS=32
+NUM_TRAJ=4
+MAX_ITER=6
+MAX_AGENTS=48
 
 # actor_rollout_ref.actor.optim.lr=1e-6 \
-    # actor_rollout_ref.rollout.enable_chunked_prefill=False \
-    # actor_rollout_ref.rollout.max_num_batched_tokens=32768 \
-    # actor_rollout_ref.async_actor_rollout=False \
-    # actor_rollout_ref.rollout.fine_grain_transfer=$FG_TRANSFER \
+# actor_rollout_ref.rollout.enable_chunked_prefill=False \
+# actor_rollout_ref.rollout.max_num_batched_tokens=32768 \
+# actor_rollout_ref.async_actor_rollout=False \
+# actor_rollout_ref.rollout.fine_grain_transfer=$FG_TRANSFER \
 
-uv run --isolated --frozen --directory . --env-file .env -m verl.trainer.main_ppo_sky \
+uv run --isolated --frozen --directory . --env-file .env verl/trainer/main_ppo_sky.py \
     data.train_files=["$DATA_PATH/train.parquet"] \
     data.val_files=["$DATA_PATH/validation.parquet"] \
     data.train_batch_size=16 \
