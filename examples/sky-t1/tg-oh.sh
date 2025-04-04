@@ -1,24 +1,20 @@
 set -x
 
-PROJECT_NAME='tg-oh'
-EXPERIMENT_NAME='oh-offline-32b-2node-debugging'
+PROJECT_NAME='tg-oh-train'
+EXPERIMENT_NAME='oh-test-new-setup'
 # EXPERIMENT_NAME='oh-offline-32b-2node-util80-traj16-maxiter35-agents64-vllmV0-063-autotransfer'
 # DATA_PATH='/mnt/user_storage/dataset/pruned_swe-gym/'
 DATA_PATH='/mnt/user_storage/dataset/swe-gym2/'
-# CKPT_PATH='/mnt/user_storage/ckpt'
-CKPT_PATH='/home/ray/default/ckpt'
-# SFT_MODEL_PATH='deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B'
-# SFT_MODEL_PATH='deepseek-ai/DeepSeek-R1-Distill-Qwen-7B'
-# SFT_MODEL_PATH='/mnt/user_storage/models/OpenHands-7B-Agent'
-# SFT_MODEL_PATH='/mnt/user_storage/models/OpenHands-32B-Agent'
-SFT_MODEL_PATH='/mnt/user_storage/models/openhands-lm-32b-v0.1'
+CKPT_PATH='/mnt/shared_storage/ckpt'
+# CKPT_PATH='/home/ray/default/ckpt'
+SFT_MODEL_PATH='/mnt/shared_storage/models/openhands-lm-32b-v0.1'
 
 
-NNODES=2
+NNODES=1
 FG_TRANSFER=False
-NUM_TRAJ=8
-MAX_ITER=35
-MAX_AGENTS=64
+NUM_TRAJ=2
+MAX_ITER=2
+MAX_AGENTS=32
 
 # actor_rollout_ref.actor.optim.lr=1e-6 \
 # actor_rollout_ref.rollout.enable_chunked_prefill=False \
