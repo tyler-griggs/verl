@@ -10,23 +10,22 @@ CKPT_PATH='/home/ray/default/ckpt'
 # SFT_MODEL_PATH='deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B'
 # SFT_MODEL_PATH='deepseek-ai/DeepSeek-R1-Distill-Qwen-7B'
 # SFT_MODEL_PATH='/mnt/user_storage/models/OpenHands-7B-Agent'
-SFT_MODEL_PATH='/mnt/user_storage/models/OpenHands-32B-Agent'
+# SFT_MODEL_PATH='/mnt/user_storage/models/OpenHands-32B-Agent'
+SFT_MODEL_PATH='/mnt/user_storage/models/openhands-lm-32b-v0.1'
 
-# TODO: remove skip first step
-# TODO: move order of log prob calculation back to before adv/reward
-# TODO: remove skip optimizer save and data loader
 
 NNODES=2
 FG_TRANSFER=False
-NUM_TRAJ=4
-MAX_ITER=6
-MAX_AGENTS=48
+NUM_TRAJ=8
+MAX_ITER=35
+MAX_AGENTS=64
 
 # actor_rollout_ref.actor.optim.lr=1e-6 \
 # actor_rollout_ref.rollout.enable_chunked_prefill=False \
 # actor_rollout_ref.rollout.max_num_batched_tokens=32768 \
 # actor_rollout_ref.async_actor_rollout=False \
 # actor_rollout_ref.rollout.fine_grain_transfer=$FG_TRANSFER \
+# actor_rollout_ref.rollout.free_cache_engine=True \
 
 uv run --isolated --frozen --directory . --env-file .env verl/trainer/main_ppo_sky.py \
     data.train_files=["$DATA_PATH/train.parquet"] \
@@ -37,7 +36,7 @@ uv run --isolated --frozen --directory . --env-file .env verl/trainer/main_ppo_s
     actor_rollout_ref.model.path=$SFT_MODEL_PATH \
     actor_rollout_ref.hybrid_engine=True \
     actor_rollout_ref.actor.masking=True \
-    actor_rollout_ref.actor.optim.lr=0 \
+    actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.ppo_mini_batch_size=16 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=4 \
@@ -46,7 +45,7 @@ uv run --isolated --frozen --directory . --env-file .env verl/trainer/main_ppo_s
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.entropy_coeff=0. \
-    actor_rollout_ref.rollout.free_cache_engine=False \
+    actor_rollout_ref.rollout.free_cache_engine=True \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=8 \
     actor_rollout_ref.rollout.name=vllm \
@@ -71,7 +70,7 @@ uv run --isolated --frozen --directory . --env-file .env verl/trainer/main_ppo_s
     trainer.nnodes=$NNODES \
     trainer.save_freq=0 \
     trainer.test_freq=0 \
-    trainer.total_epochs=10 \
+    trainer.total_epochs=100 \
     trainer.resume_mode=disable \
     algorithm.adv_estimator=grpo \
     algorithm.adv_params.verifier_gamma=1.0 \

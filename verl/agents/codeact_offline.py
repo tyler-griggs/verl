@@ -322,9 +322,11 @@ class BatchManager:
                     left_pad=True
                 )
                 padded_inputs.append(padded)
+                # padded_inputs.append(padded[0])
 
             # Then concatenate the padded sequences
             batch_input_ids = torch.cat(padded_inputs, dim=0)
+            # batch_input_ids = torch.stack(padded_inputs, dim=0)
             
             batch = TensorDict(
                 {
@@ -627,7 +629,6 @@ class OnlineCodeActAgent(Agent):
         messages = convert_fncall_messages_to_non_fncall_messages(
                     messages, self.tools
                 )
-        # print(f"instance id {self.instance_id}, trajectory {self.trajectory_id}, messages: {messages}")
         
         try:
             # Add request to batch manager using instance_id and trajectory_id
